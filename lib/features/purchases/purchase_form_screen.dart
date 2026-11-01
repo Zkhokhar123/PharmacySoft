@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/app_colors.dart';
 import '../../core/formatters.dart';
+import '../../core/id_generator.dart';
 import '../../core/pack_qty.dart';
 import '../../data/models/medicine.dart';
 import '../../shared/widgets/app_card.dart';
@@ -70,12 +71,19 @@ class _PurchaseFormState extends ConsumerState<PurchaseFormScreen> {
   }
 
   Future<void> _addLine({String? initialMedicineId}) async {
-    final item = await showDialog<PurchaseDraftItem>(
+    await showDialog<void>(
       context: context,
-      builder: (context) =>
-          _AddItemDialog(initialMedicineId: initialMedicineId),
+      barrierDismissible: false,
+      builder: (context) => _AddItemDialog(
+        initialMedicineId: initialMedicineId,
+        onItemAdded: (item) {
+          setState(() {
+            _items.add(item);
+            _error = null;
+          });
+        },
+      ),
     );
-    if (item != null) setState(() => _items.add(item));
   }
 
   @override
@@ -152,14 +160,14 @@ class _PurchaseFormState extends ConsumerState<PurchaseFormScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(children: [
-                        const Text('Items',
-                            style: TextStyle(
+                        Text('Items (${_items.length})',
+                            style: const TextStyle(
                                 fontSize: 16, fontWeight: FontWeight.w600)),
                         const Spacer(),
                         ElevatedButton.icon(
                           icon: const Icon(Icons.add, size: 18),
                           label: const Text('Add Item'),
-                          onPressed: _addLine,
+                          onPressed: () => _addLine(),
                         ),
                       ]),
                       const SizedBox(height: 12),
@@ -237,8 +245,13 @@ class _PurchaseFormState extends ConsumerState<PurchaseFormScreen> {
                         }),
                         const Divider(height: 10),
                         Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
                           children: [
+                            OutlinedButton.icon(
+                              icon: const Icon(Icons.add, size: 16),
+                              label: const Text('Add Another Item'),
+                              onPressed: () => _addLine(),
+                            ),
+                            const Spacer(),
                             Text(
                               'Total: ${Formatters.currency(total, symbol: symbol)}',
                               style: const TextStyle(
@@ -293,9 +306,107 @@ class _PurchaseFormState extends ConsumerState<PurchaseFormScreen> {
 
 // ── Add item dialog ──────────────────────────────────────────────────────────
 
+DateTime? parseExpiryDate(String text) {
+  final clean = text.trim();
+  if (clean.isEmpty) return null;
+
+  // Format 1: DD/MM/YYYY or DD-MM-YYYY (e.g. 15/12/2026)
+  final ddmmyyyy =
+      RegExp(r'^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$').firstMatch(clean);
+  if (ddmmyyyy != null) {
+    final d = int.tryParse(ddmmyyyy.group(1)!);
+    final m = int.tryParse(ddmmyyyy.group(2)!);
+    final y = int.tryParse(ddmmyyyy.group(3)!);
+    if (d != null &&
+        m != null &&
+        y != null &&
+        m >= 1 &&
+        m <= 12 &&
+        d >= 1 &&
+        d <= 31) {
+      return DateTime(y, m, d, 23, 59, 59);
+    }
+  }
+
+  // Format 2: DD/MM/YY or DD-MM-YY (e.g. 15/12/26)
+  final ddmmyy =
+      RegExp(r'^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2})$').firstMatch(clean);
+  if (ddmmyy != null) {
+    final d = int.tryParse(ddmmyy.group(1)!);
+    final m = int.tryParse(ddmmyy.group(2)!);
+    final y = 2000 + (int.tryParse(ddmmyy.group(3)!) ?? 0);
+    if (d != null && m != null && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return DateTime(y, m, d, 23, 59, 59);
+    }
+  }
+
+  // Format 3: MM/YY or MM-YY (e.g. 12/26 or 05/27)
+  final mmyy = RegExp(r'^(\d{1,2})[\/\-](\d{2})$').firstMatch(clean);
+  if (mmyy != null) {
+    final m = int.tryParse(mmyy.group(1)!);
+    final y = 2000 + (int.tryParse(mmyy.group(2)!) ?? 0);
+    if (m != null && m >= 1 && m <= 12) {
+      final lastDay = DateTime(y, m + 1, 0).day;
+      return DateTime(y, m, lastDay, 23, 59, 59);
+    }
+  }
+
+  // Format 4: MM/YYYY or MM-YYYY (e.g. 12/2026)
+  final mmyyyy = RegExp(r'^(\d{1,2})[\/\-](\d{4})$').firstMatch(clean);
+  if (mmyyyy != null) {
+    final m = int.tryParse(mmyyyy.group(1)!);
+    final y = int.tryParse(mmyyyy.group(2)!);
+    if (m != null && y != null && m >= 1 && m <= 12) {
+      final lastDay = DateTime(y, m + 1, 0).day;
+      return DateTime(y, m, lastDay, 23, 59, 59);
+    }
+  }
+
+  // Format 5: YYYY-MM-DD
+  final yyyymmdd =
+      RegExp(r'^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$').firstMatch(clean);
+  if (yyyymmdd != null) {
+    final y = int.tryParse(yyyymmdd.group(1)!);
+    final m = int.tryParse(yyyymmdd.group(2)!);
+    final d = int.tryParse(yyyymmdd.group(3)!);
+    if (d != null &&
+        m != null &&
+        y != null &&
+        m >= 1 &&
+        m <= 12 &&
+        d >= 1 &&
+        d <= 31) {
+      return DateTime(y, m, d, 23, 59, 59);
+    }
+  }
+
+  // Format 6: 4 digits MMYY (e.g. 1226)
+  if (clean.length == 4 && int.tryParse(clean) != null) {
+    final m = int.parse(clean.substring(0, 2));
+    final y = 2000 + int.parse(clean.substring(2, 4));
+    if (m >= 1 && m <= 12) {
+      final lastDay = DateTime(y, m + 1, 0).day;
+      return DateTime(y, m, lastDay, 23, 59, 59);
+    }
+  }
+
+  // Format 7: 6 digits MMYYYY (e.g. 122026)
+  if (clean.length == 6 && int.tryParse(clean) != null) {
+    final m = int.parse(clean.substring(0, 2));
+    final y = int.parse(clean.substring(2, 6));
+    if (m >= 1 && m <= 12) {
+      final lastDay = DateTime(y, m + 1, 0).day;
+      return DateTime(y, m, lastDay, 23, 59, 59);
+    }
+  }
+
+  return null;
+}
+
 class _AddItemDialog extends ConsumerStatefulWidget {
   final String? initialMedicineId;
-  const _AddItemDialog({this.initialMedicineId});
+  final ValueChanged<PurchaseDraftItem>? onItemAdded;
+  const _AddItemDialog({this.initialMedicineId, this.onItemAdded});
 
   @override
   ConsumerState<_AddItemDialog> createState() => _AddItemDialogState();
@@ -312,7 +423,9 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
   final _unitsPerPackCtrl = TextEditingController(text: '1');
   final _packPurchaseCtrl = TextEditingController(text: '0');
   final _salePriceCtrl = TextEditingController(text: '0');
+  late final TextEditingController _expiryCtrl;
   DateTime _expiry = DateTime.now().add(const Duration(days: 365));
+  int _sessionAddedCount = 0;
 
   int get _packQty => int.tryParse(_packQtyCtrl.text) ?? 0;
   int get _unitsPerPack => PackQty.normalizePackSize(
@@ -325,6 +438,13 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
   @override
   void initState() {
     super.initState();
+    final defaultExp = DateTime.now().add(const Duration(days: 365));
+    _expiry = defaultExp;
+    _expiryCtrl = TextEditingController(
+      text:
+          '${defaultExp.month.toString().padLeft(2, '0')}/${defaultExp.year.toString().substring(2)}',
+    );
+
     if (widget.initialMedicineId != null &&
         widget.initialMedicineId!.isNotEmpty) {
       _medicineId = widget.initialMedicineId;
@@ -348,6 +468,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
     _unitsPerPackCtrl.dispose();
     _packPurchaseCtrl.dispose();
     _salePriceCtrl.dispose();
+    _expiryCtrl.dispose();
     super.dispose();
   }
 
@@ -363,17 +484,86 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
             .toStringAsFixed(2);
   }
 
+  PurchaseDraftItem? _buildDraftItem() {
+    if (!_formKey.currentState!.validate()) return null;
+    if (_medicineId == null || _medicineId!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a medicine first')),
+      );
+      return null;
+    }
+    final parsedExp = parseExpiryDate(_expiryCtrl.text) ?? _expiry;
+    final batchNo = _batchCtrl.text.trim().isEmpty
+        ? 'B-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}'
+        : _batchCtrl.text.trim();
+
+    return PurchaseDraftItem(
+      medicineId: _medicineId!,
+      medicineName: _medicineName,
+      batchNumber: batchNo,
+      quantity: _totalUnits,
+      packQty: _packQty,
+      unitsPerPack: _unitsPerPack,
+      packName: _packName,
+      unit: _unit,
+      purchasePrice: _perTabCost,
+      packPurchasePrice: _packRate,
+      salePrice: double.tryParse(_salePriceCtrl.text) ?? 0,
+      expiryDate: parsedExp.millisecondsSinceEpoch,
+    );
+  }
+
+  void _resetForNext() {
+    setState(() {
+      _sessionAddedCount++;
+      _medicineId = null;
+      _medicineName = '';
+      _batchCtrl.clear();
+      _packQtyCtrl.text = '1';
+      _unitsPerPackCtrl.text = '1';
+      _packPurchaseCtrl.text = '0';
+      _salePriceCtrl.text = '0';
+      final defaultExp = DateTime.now().add(const Duration(days: 365));
+      _expiry = defaultExp;
+      _expiryCtrl.text =
+          '${defaultExp.month.toString().padLeft(2, '0')}/${defaultExp.year.toString().substring(2)}';
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final medicines = ref.watch(medicinesProvider);
     final symbol = ref.watch(settingsProvider).currencySymbol;
 
     return AlertDialog(
-      shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      title: const Text('Add Item'),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      title: Row(
+        children: [
+          const Icon(Icons.add_shopping_cart, color: AppColors.primary),
+          const SizedBox(width: 8),
+          const Text('Add Purchase Item'),
+          if (_sessionAddedCount > 0) ...[
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                '$_sessionAddedCount added',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
       content: SizedBox(
-        width: 520,
+        width: 540,
         child: Form(
           key: _formKey,
           child: SingleChildScrollView(
@@ -381,35 +571,144 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                DropdownButtonFormField<String>(
-                  initialValue: _medicineId,
-                  decoration:
-                      const InputDecoration(labelText: 'Medicine *'),
-                  hint: const Text('Select medicine'),
-                  items: medicines
-                      .map((m) => DropdownMenuItem(
-                          value: m.id, child: Text(m.name)))
-                      .toList(),
-                  validator: (v) => v == null ? 'Required' : null,
+                // Medicine selector with + Quick Add button
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        value: _medicineId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Medicine *',
+                          hintText: 'Select medicine',
+                        ),
+                        items: medicines.map((m) {
+                          final sub = m.genericName.isNotEmpty
+                              ? ' (${m.genericName})'
+                              : '';
+                          return DropdownMenuItem(
+                            value: m.id,
+                            child: Text(
+                              '${m.name}$sub',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          );
+                        }).toList(),
+                        validator: (v) =>
+                            v == null ? 'Please select a medicine' : null,
+                        onChanged: (v) {
+                          final med =
+                              medicines.where((m) => m.id == v).firstOrNull;
+                          setState(() {
+                            _medicineId = v;
+                            _applyMedicine(med);
+                          });
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Tooltip(
+                        message: 'Quickly register a new medicine',
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.add, size: 16),
+                          label: const Text('New'),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 14),
+                          ),
+                          onPressed: () async {
+                            final created = await showDialog<Medicine>(
+                              context: context,
+                              builder: (ctx) =>
+                                  const _QuickAddMedicineDialog(),
+                            );
+                            if (created != null && mounted) {
+                              setState(() {
+                                _medicineId = created.id;
+                                _applyMedicine(created);
+                              });
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+
+                // Batch Number (auto button)
+                TextFormField(
+                  controller: _batchCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Batch Number',
+                    hintText: 'e.g. B-101 (optional, auto if blank)',
+                    suffixIcon: TextButton(
+                      onPressed: () {
+                        final auto =
+                            'B-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
+                        _batchCtrl.text = auto;
+                        setState(() {});
+                      },
+                      child:
+                          const Text('Auto', style: TextStyle(fontSize: 12)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Manual Expiry Date field + Calendar button
+                TextFormField(
+                  controller: _expiryCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Expiry Date (MM/YY or MM/YYYY) *',
+                    hintText: 'e.g. 12/26 or 12/2026',
+                    helperText:
+                        'Manual enter: MM/YY (e.g. 12/26) or tap calendar',
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.calendar_month,
+                          color: AppColors.primary),
+                      tooltip: 'Select from calendar',
+                      onPressed: () async {
+                        final parsed =
+                            parseExpiryDate(_expiryCtrl.text) ?? _expiry;
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: parsed.isBefore(DateTime.now())
+                              ? DateTime.now()
+                              : parsed,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime(2050),
+                        );
+                        if (picked != null) {
+                          setState(() {
+                            _expiry = picked;
+                            _expiryCtrl.text =
+                                '${picked.month.toString().padLeft(2, '0')}/${picked.year.toString().substring(2)}';
+                          });
+                        }
+                      },
+                    ),
+                  ),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) {
+                      return 'Enter expiry date (e.g. 12/26)';
+                    }
+                    if (parseExpiryDate(v) == null) {
+                      return 'Invalid format. Use MM/YY (e.g. 12/26) or DD/MM/YYYY';
+                    }
+                    return null;
+                  },
                   onChanged: (v) {
-                    final med =
-                        medicines.where((m) => m.id == v).firstOrNull;
-                    setState(() {
-                      _medicineId = v;
-                      _applyMedicine(med);
-                    });
+                    final parsed = parseExpiryDate(v);
+                    if (parsed != null) _expiry = parsed;
                   },
                 ),
                 const SizedBox(height: 12),
-                TextFormField(
-                  controller: _batchCtrl,
-                  decoration: const InputDecoration(
-                      labelText: 'Batch Number *'),
-                  validator: (v) => v == null || v.trim().isEmpty
-                      ? 'Required'
-                      : null,
-                ),
-                const SizedBox(height: 12),
+
+                // Quantity & Units per pack
                 Row(children: [
                   Expanded(
                     child: TextFormField(
@@ -420,7 +719,7 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
                       onChanged: (_) => setState(() {}),
                       validator: (v) =>
                           (int.tryParse(v ?? '') ?? 0) <= 0
-                              ? 'Enter boxes > 0'
+                              ? 'Enter packs > 0'
                               : null,
                     ),
                   ),
@@ -450,12 +749,14 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
                   child: Text(
                     _packQty > 0
                         ? 'Stock in: $_packQty $_packName × $_unitsPerPack $_unit = $_totalUnits $_unit'
-                        : 'Example: 4 Box × 50 Tab = 200 Tab',
+                        : 'Example: 4 Box × 50 Tab = 200 Tab (or 10 Bottles)',
                     style: const TextStyle(
                         fontWeight: FontWeight.w600, fontSize: 13),
                   ),
                 ),
                 const SizedBox(height: 12),
+
+                // Purchase Rate & Sale Price
                 Row(children: [
                   Expanded(
                     child: TextFormField(
@@ -491,24 +792,197 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
                   style: const TextStyle(
                       color: AppColors.textMuted, fontSize: 12),
                 ),
-                const SizedBox(height: 8),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading:
-                      const Icon(Icons.event, color: AppColors.primary),
-                  title: Text(
-                      'Expiry: ${Formatters.date(_expiry)}'),
-                  subtitle: const Text('Tap to change'),
-                  onTap: () async {
-                    final picked = await showDatePicker(
-                      context: context,
-                      initialDate: _expiry,
-                      firstDate: DateTime.now(),
-                      lastDate: DateTime.now()
-                          .add(const Duration(days: 3650)),
-                    );
-                    if (picked != null) setState(() => _expiry = picked);
-                  },
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(_sessionAddedCount > 0 ? 'Done' : 'Cancel'),
+        ),
+        OutlinedButton.icon(
+          icon: const Icon(Icons.add, size: 16),
+          label: const Text('Add & Next Item'),
+          onPressed: () {
+            final item = _buildDraftItem();
+            if (item == null) return;
+            widget.onItemAdded?.call(item);
+            _resetForNext();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('${item.medicineName} added! Enter next item.'),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          },
+        ),
+        ElevatedButton.icon(
+          icon: const Icon(Icons.check, size: 16),
+          label: const Text('Add & Done'),
+          onPressed: () {
+            final item = _buildDraftItem();
+            if (item == null) return;
+            widget.onItemAdded?.call(item);
+            Navigator.of(context).pop();
+          },
+        ),
+      ],
+    );
+  }
+}
+
+// ── Quick Add Medicine Dialog ────────────────────────────────────────────────
+
+class _QuickAddMedicineDialog extends ConsumerStatefulWidget {
+  const _QuickAddMedicineDialog();
+
+  @override
+  ConsumerState<_QuickAddMedicineDialog> createState() =>
+      _QuickAddMedicineDialogState();
+}
+
+class _QuickAddMedicineDialogState
+    extends ConsumerState<_QuickAddMedicineDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameCtrl = TextEditingController();
+  final _genericCtrl = TextEditingController();
+  final _unitCtrl = TextEditingController(text: 'Tab');
+  final _packNameCtrl = TextEditingController(text: 'Box');
+  final _unitsPerPackCtrl = TextEditingController(text: '1');
+  final _salePriceCtrl = TextEditingController(text: '0');
+  final _purchasePriceCtrl = TextEditingController(text: '0');
+  String _categoryId = '';
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _genericCtrl.dispose();
+    _unitCtrl.dispose();
+    _packNameCtrl.dispose();
+    _unitsPerPackCtrl.dispose();
+    _salePriceCtrl.dispose();
+    _purchasePriceCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final categories = ref.watch(categoriesProvider);
+
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      title: const Row(
+        children: [
+          Icon(Icons.medication, color: AppColors.primary),
+          SizedBox(width: 8),
+          Text('Quick Add Medicine'),
+        ],
+      ),
+      content: SizedBox(
+        width: 480,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextFormField(
+                  controller: _nameCtrl,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Medicine Name *',
+                    hintText: 'e.g. Hydryllin Syrup, Panadol 500mg',
+                  ),
+                  validator: (v) =>
+                      v == null || v.trim().isEmpty ? 'Required' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _genericCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Generic / Formula Name',
+                    hintText: 'e.g. Paracetamol, Aminophylline',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: _categoryId.isEmpty ? null : _categoryId,
+                  decoration: const InputDecoration(labelText: 'Category'),
+                  hint: const Text('Select category'),
+                  items: categories
+                      .map((c) =>
+                          DropdownMenuItem(value: c.id, child: Text(c.name)))
+                      .toList(),
+                  onChanged: (v) => setState(() => _categoryId = v ?? ''),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _unitCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Base Unit *',
+                          hintText: 'Tab / Bottle / ml',
+                        ),
+                        validator: (v) =>
+                            v == null || v.trim().isEmpty ? 'Required' : null,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _packNameCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Pack Name *',
+                          hintText: 'Box / Carton / Strip',
+                        ),
+                        validator: (v) =>
+                            v == null || v.trim().isEmpty ? 'Required' : null,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _unitsPerPackCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Units/Pack *',
+                          hintText: 'e.g. 1 or 50',
+                        ),
+                        keyboardType: TextInputType.number,
+                        validator: (v) => (int.tryParse(v ?? '') ?? 0) <= 0
+                            ? 'Min 1'
+                            : null,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _purchasePriceCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Purchase Rate per Unit',
+                        ),
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _salePriceCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Sale Rate per Unit',
+                        ),
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -521,24 +995,27 @@ class _AddItemDialogState extends ConsumerState<_AddItemDialog> {
           child: const Text('Cancel'),
         ),
         ElevatedButton(
-          onPressed: () {
+          onPressed: () async {
             if (!_formKey.currentState!.validate()) return;
-            Navigator.of(context).pop(PurchaseDraftItem(
-              medicineId: _medicineId!,
-              medicineName: _medicineName,
-              batchNumber: _batchCtrl.text.trim(),
-              quantity: _totalUnits,
-              packQty: _packQty,
-              unitsPerPack: _unitsPerPack,
-              packName: _packName,
-              unit: _unit,
-              purchasePrice: _perTabCost,
-              packPurchasePrice: _packRate,
-              salePrice: double.parse(_salePriceCtrl.text),
-              expiryDate: _expiry.millisecondsSinceEpoch,
-            ));
+            final med = Medicine(
+              id: IdGenerator.generate('med'),
+              name: _nameCtrl.text.trim(),
+              genericName: _genericCtrl.text.trim(),
+              categoryId: _categoryId,
+              unit:
+                  _unitCtrl.text.trim().isEmpty ? 'Tab' : _unitCtrl.text.trim(),
+              packName: _packNameCtrl.text.trim().isEmpty
+                  ? 'Box'
+                  : _packNameCtrl.text.trim(),
+              unitsPerPack: int.tryParse(_unitsPerPackCtrl.text) ?? 1,
+              purchasePrice: double.tryParse(_purchasePriceCtrl.text) ?? 0,
+              salePrice: double.tryParse(_salePriceCtrl.text) ?? 0,
+              createdAt: DateTime.now().millisecondsSinceEpoch,
+            );
+            await ref.read(medicinesProvider.notifier).add(med);
+            if (context.mounted) Navigator.of(context).pop(med);
           },
-          child: const Text('Add'),
+          child: const Text('Save & Select'),
         ),
       ],
     );
